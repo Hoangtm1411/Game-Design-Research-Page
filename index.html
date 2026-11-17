@@ -222,6 +222,18 @@
   .fl-legend code{color:var(--text);font-family:Consolas,Menlo,monospace}
   @media (max-width:760px){.fl-row{grid-template-columns:28px 1fr auto}.fl-row input.expr{grid-column:1/-1}}
 
+  .group{position:relative}
+  .group.has-mark .ghead{margin-bottom:24px}
+  .gmark{position:absolute;width:0;border-left:3px dashed var(--c);pointer-events:none;z-index:2;
+    filter:drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000) drop-shadow(0 0 1px #000)}
+  .gmark span{position:absolute;bottom:100%;left:-1.5px;transform:translate(-50%,-4px);background:var(--c);color:var(--ink);
+    font-size:11px;font-weight:bold;padding:1px 7px;border-radius:999px;white-space:nowrap;box-shadow:0 0 0 1px #000}
+  .mk{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted);border:1px dashed #4a4a55;border-radius:999px;padding:2px 8px}
+  .mk input[type=number]{width:58px}
+  .mk input[type=text]{width:110px}
+  .mk input[type=number],.mk input[type=text]{background:#000;color:var(--text);border:1px solid #3a3a44;border-radius:4px;padding:2px 5px;font-size:12px;font-family:inherit}
+  body.edit .group.has-mark .bar{cursor:crosshair}
+
   /* Chú giải */
   .legend{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 8px}
   #legend2{margin-bottom:12px}
@@ -353,6 +365,10 @@
   <p class="sub editonly">Mẹo: bấm vào bất kì chữ nào (tên nhóm, tên hàng, mô tả) để sửa. Ô số để trống nghĩa là chưa có số liệu. Mọi thay đổi được tự lưu trong trình duyệt này; dùng “Lưu thành file HTML mới” hoặc “Xuất JSON” để giữ bản sao lâu dài.</p>
 </div>
 
+<datalist id="markerColors">
+  <option value="#FF2BD6"></option><option value="#22D3EE"></option><option value="#A855F7"></option>
+  <option value="#F0ABFC"></option><option value="#94A3B8"></option><option value="#FFFFFF"></option>
+</datalist>
 <dialog id="dlg">
   <p id="dlgMsg"></p>
   <textarea id="dlgText" spellcheck="false"></textarea>
@@ -477,7 +493,12 @@
       15
      ]
     }
-   ]
+   ],
+   "marker": {
+    "pos": 91,
+    "color": "#FF2BD6",
+    "label": "Max"
+   }
   },
   {
    "name": "Casual player point",
@@ -508,7 +529,8 @@
       2
      ]
     }
-   ]
+   ],
+   "marker": null
   },
   {
    "name": "My point",
@@ -539,7 +561,8 @@
       2
      ]
     }
-   ]
+   ],
+   "marker": null
   },
   {
    "name": "Ultimate CP Player",
@@ -570,7 +593,8 @@
       null
      ]
     }
-   ]
+   ],
+   "marker": null
   }
  ],
  "ability": {
@@ -1116,6 +1140,7 @@
       - Màu Game online / Game offline nằm trong "types".
       - Mỗi hàng có "type": 0 = online, 1 = offline, bỏ trống = không phân loại.
       - Mỗi nhóm có "game" = tựa game / thể loại mà ý kiến đó nói tới.
+      - "marker" của nhóm = vạch nét đứt: pos (0..100, tính từ trái), color, label; null = không có vạch.
       - "motivation" = mục ③ của tab "Theo động lực" (TheChiptide).
       - "motivation.flowLines" = các đường flow tuỳ chỉnh: tên, công thức y theo x (0..100), màu, nét đứt.
       - "ability" = toàn bộ nội dung tab "Theo năng lực" (Micro / Meso / Macro).
@@ -1148,7 +1173,8 @@ function migrate(d) {
   }
   for (const k of ['flowLines', 'funs', 'funNote', 'funSource', 'hooks', 'hooksNote', 'hooksSource', 'accessIntro', 'accessFacts', 'accessWays', 'accessNote', 'accessSource']) if (d.motivation[k] == null) d.motivation[k] = clone(DEFAULT.motivation[k]);
   d.types.forEach((t, i) => { if (!t.color) t.color = (DEFAULT.types[i] || {}).color || '#888888'; });
-  d.groups.forEach(g => { if (g.game == null) g.game = ''; g.rows.forEach(r => {
+  d.groups.forEach(g => { if (g.marker === undefined) g.marker = /^Maximilian/.test(g.name) ? clone(DEFAULT.groups[0].marker) : null;
+    if (g.game == null) g.game = ''; g.rows.forEach(r => {
     if (r.type === undefined) { const i = d.types.findIndex(t => t.name.toLowerCase() === String(r.name).toLowerCase()); r.type = i < 0 ? null : i; } }); });
   return d;
 }
@@ -1249,6 +1275,50 @@ function barFor(row) {
   return { bar, sum, small };
 }
 
+/* ---------- Vạch vị trí của người nêu quan điểm ----------
+   g.marker = { pos: 0..100 (tính từ mép trái thanh, cộng dồn %), color, label }.
+   Vạch nét đứt có viền đen nên đọc được trên cả 6 màu thanh. Ở chế độ sửa: bấm vào thanh để đặt vạch. */
+const MARKER_COLORS = ['#FF2BD6', '#22D3EE', '#A855F7', '#F0ABFC', '#94A3B8', '#FFFFFF'];
+const markObserver = new ResizeObserver(es => es.forEach(e => e.target._place && e.target._place()));
+function placeMarker(g, box) {
+  const place = () => {
+    const bars = box.querySelectorAll('.bar'); let mk = box.querySelector('.gmark');
+    if (!g.marker || !bars.length) { if (mk) mk.remove(); return; }
+    if (!mk) { mk = el('div', { class: 'gmark' }, [el('span')]); box.append(mk); }
+    const b0 = bars[0].getBoundingClientRect(), b1 = bars[bars.length - 1].getBoundingClientRect(), bb = box.getBoundingClientRect();
+    if (!b0.width) return;
+    const pos = Math.min(100, Math.max(0, Number(g.marker.pos) || 0));
+    mk.style.left = (b0.left - bb.left + b0.width * pos / 100 - 1.5) + 'px';
+    mk.style.top = (b0.top - bb.top - 4) + 'px';
+    mk.style.height = (b1.bottom - b0.top + 8) + 'px';
+    mk.style.setProperty('--c', g.marker.color || MARKER_COLORS[0]);
+    mk.style.setProperty('--ink', ink(g.marker.color || MARKER_COLORS[0]));
+    mk.firstChild.textContent = (g.marker.label ? g.marker.label + ' · ' : '') + fmt(pos) + '%';
+    mk.title = 'Vị trí trong cộng đồng: ' + fmt(pos) + '% tính từ trái';
+  };
+  box._place = place; requestAnimationFrame(place);
+  box.onclick = e => {   // chế độ sửa: bấm vào thanh để đặt vị trí vạch
+    const bar = e.target.closest('.bar');
+    if (!bar || !g.marker || !document.body.classList.contains('edit')) return;
+    const r = bar.getBoundingClientRect();
+    g.marker.pos = Math.round((e.clientX - r.left) / r.width * 200) / 2;
+    const n = box.querySelector('.mk input[type=number]'); if (n) n.value = g.marker.pos;
+    place(); save(false);
+  };
+}
+function markerControls(g, box) {
+  if (!g.marker) return el('button', { class: 'mini editonly', textContent: '+ Vạch vị trí', title: 'Thêm vạch nét đứt cho biết người này đứng ở đâu trong cộng đồng',
+    onclick: () => { const used = data.groups.map(x => x.marker && x.marker.color);
+      g.marker = { pos: 50, color: MARKER_COLORS.find(c => !used.includes(c)) || MARKER_COLORS[0], label: '' }; save(); } });
+  const upd = () => { box._place && box._place(); save(false); };
+  const color = el('input', { type: 'color', value: g.marker.color || MARKER_COLORS[0], title: 'Màu vạch (có sẵn vài màu gợi ý)', oninput: e => { g.marker.color = e.target.value; upd(); } });
+  color.setAttribute('list', 'markerColors');
+  return el('span', { class: 'mk editonly', title: 'Vạch vị trí: cũng có thể bấm thẳng vào thanh để đặt' }, ['Vạch:',
+    el('input', { type: 'number', min: 0, max: 100, step: 0.5, value: g.marker.pos, oninput: e => { g.marker.pos = Number(e.target.value); upd(); } }), '%',
+    color,
+    el('input', { type: 'text', value: g.marker.label || '', placeholder: 'nhãn, ví dụ: Max', oninput: e => { g.marker.label = e.target.value; upd(); } }),
+    el('button', { class: 'mini', textContent: 'Bỏ vạch', onclick: () => { g.marker = null; save(); } })]);
+}
 function renderGroups() {
   const root = $('groups'); root.innerHTML = '';
   data.groups.forEach((g, gi) => {
@@ -1258,6 +1328,7 @@ function renderGroups() {
       el('span', { class: 'game' + (g.game ? '' : ' blank') }, [el('i', { textContent: 'Tựa game / thể loại:' }),
         edit('span', '', () => g.game || '', v => g.game = v, 'điền tên game hoặc thể loại')]),
       edit('span', 'gnote', () => g.note || '', v => g.note = v, 'ghi chú, nguồn'),
+      markerControls(g, box),
       el('button', { class: 'mini editonly', textContent: '+ Thêm hàng', onclick: () => {
         g.rows.push({ name: 'Hàng mới', type: null, values: data.levels.map(() => null) }); save(); } }),
       el('button', { class: 'mini editonly', textContent: 'Xoá nhóm', onclick: () => {
@@ -1289,6 +1360,7 @@ function renderGroups() {
       box.append(rowEl, smallEl, inputs);
     });
     root.append(box);
+    if (g.marker) { box.classList.add('has-mark'); placeMarker(g, box); markObserver.observe(box); }
   });
 }
 
